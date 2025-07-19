@@ -288,17 +288,54 @@ class Bot:
         emit_msg(
             gui_window=self.gui_window,
             color="msg_purple",
-            msg="No mobs found - rotating camera super slowly to the right"
+            msg="No mobs found - starting 3-step rotation scan"
         )
         
-        # Super slow camera rotation to the right using keyboard right arrow
-        rotation_duration = float(self.config["camera_rotation_duration_sec"])
+        # Perform up to 3 right arrow holds, scanning for enemies between each hold
+        for rotation_step in range(3):
+            if not self.__farm_thread_running:  # Check if bot was stopped
+                break
+                
+            emit_msg(
+                gui_window=self.gui_window,
+                color="msg_purple",
+                msg=f"Rotation step {rotation_step + 1}/3 - holding right arrow for 2 seconds"
+            )
+            
+            # Hold right arrow key for 2 seconds for rotation
+            self.keyboard.hold_key(VKEY["right_arrow"], press_time=2.0)
+            sleep(0.5)  # Brief pause after rotation step
+            
+            # Scan for mobs after each rotation step
+            emit_msg(
+                gui_window=self.gui_window,
+                color="msg_purple",
+                msg=f"Scanning for mobs after rotation step {rotation_step + 1}"
+            )
+            
+            # Check all selected mob types for any matches
+            mobs_found = False
+            for mob in self.config["selected_mobs"]:
+                matches = self.__get_mobs_position(mob)
+                if matches:
+                    mobs_found = True
+                    emit_msg(
+                        gui_window=self.gui_window,
+                        color="msg_green",
+                        msg=f"Mobs found after rotation step {rotation_step + 1} - stopping rotation"
+                    )
+                    break
+            
+            # If mobs found, stop rotating
+            if mobs_found:
+                break
+                
+            # If this is not the last step, wait a bit before next rotation
+            if rotation_step < 2:
+                sleep(0.5)
         
-        # Use right arrow key for super slow, controlled rotation
-        # Hold the right arrow key for the specified duration
-        self.keyboard.hold_key(VKEY["right_arrow"], press_time=rotation_duration)
-        
-        sleep(1.5)  # Longer pause after rotation to allow mob detection and settling
+        # Final pause after rotation sequence
+        sleep(1.0)
 
     def __convert_penya_to_perins(self):
         # Open the inventory
