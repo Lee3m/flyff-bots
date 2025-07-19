@@ -264,6 +264,8 @@ class Gui:
 
     def __set_hotkeys(self):
         self.window.bind("<Alt_L><s>", "-STOP_BOT-")
+        self.window.bind("<Alt_L><r>", "-START_BOT-")
+        self.window.bind("<F12>", "-STOP_BOT-")
 
     def __get_layout(self):
         def Collapsible(layout, key, title="", collapsed=False):
@@ -297,7 +299,7 @@ class Gui:
                     [
                         sg.Button("Attach Window", key="-ATTACH_WINDOW-"),
                         sg.Button("Start", disabled=True, key="-START_BOT-"),
-                        sg.Button("Stop (Alt+s)", disabled=True, key="-STOP_BOT-"),
+                        sg.Button("Stop (Alt+s / F12)", disabled=True, key="-STOP_BOT-"),
                         sg.Button("Exit"),
                     ],
                     [

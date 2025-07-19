@@ -36,12 +36,15 @@ class Bot:
             "fight_time_limit_sec": 8,
             "delay_to_check_mob_still_alive_sec": 0.25,
             "convert_penya_to_perins_timer_min": 30,
+            "camera_rotation_degrees": 30,
+            "camera_rotation_duration_sec": 5.0,
             "selected_mobs": [],
         }
         self.gui_window = None
         self.frame = None
         self.debug_frame = None
         self.__farm_thread_running = False
+        self.__currently_fighting = False
 
         # Synced Timers
         self.convert_penya_to_perins_timer = SyncedTimer(
@@ -63,6 +66,7 @@ class Bot:
 
     def stop(self):
         self.__farm_thread_running = False
+        self.__currently_fighting = False
 
     def set_config(self, **options):
         """Set the config options for the bot.
@@ -94,6 +98,10 @@ class Bot:
                 The delay to check if the mob is still alive when it's fighting. Unity in seconds. Default: 0.25
             convert_penya_to_perins_timer_min: int
                 The time to convert the penya to perins. Unity in minutes. Default: 30
+            camera_rotation_degrees: int
+                The degrees to rotate camera when no mobs found. Default: 45
+            camera_rotation_duration_sec: float
+                The duration in seconds for smooth camera rotation. Default: 2.0
             selected_mobs: list
                 The list of mobs to kill. Default: []
         """
@@ -158,25 +166,51 @@ class Bot:
 
         while True:
             if not len(self.config["selected_mobs"]) > 0:
+                sleep(1)  # Wait if no mobs selected
                 continue
+
+            if not self.__farm_thread_running:
+                break
 
             self.convert_penya_to_perins_timer()
 
-            if current_mob_info_index > (len(self.config["selected_mobs"]) - 1):
-                current_mob_info_index = 0
-            current_mob = self.config["selected_mobs"][current_mob_info_index]
-            matches = self.__get_mobs_position(current_mob)
-
-            if matches:
-                mobs_killed = self.__mobs_available_on_screen(current_mob, matches, mobs_killed)
-            else:
-                # TODO: Turn around and check for mobs first before changing the current mob
-                current_mob_info_index += 1
+            # Only look for new mobs if not currently fighting AND no mob is currently selected
+            if not self.__currently_fighting and not self.__check_mob_existence():
                 if current_mob_info_index > (len(self.config["selected_mobs"]) - 1):
-                    self.__mobs_not_available_on_screen()
+                    current_mob_info_index = 0
+                current_mob = self.config["selected_mobs"][current_mob_info_index]
+                matches = self.__get_mobs_position(current_mob)
+
+                if matches:
+                    mobs_killed = self.__mobs_available_on_screen(current_mob, matches, mobs_killed)
                 else:
-                    pass
-                    # print("Current mob no found, checking another one.")
+                    # TODO: Turn around and check for mobs first before changing the current mob
+                    current_mob_info_index += 1
+                    if current_mob_info_index > (len(self.config["selected_mobs"]) - 1):
+                        self.__mobs_not_available_on_screen()
+                    else:
+                        pass
+                        # print("Current mob no found, checking another one.")
+                    
+                # Add a small delay after targeting attempt
+                sleep(0.5)
+            else:
+                # If currently fighting or mob is selected, wait longer before checking again
+                if self.__currently_fighting:
+                    emit_msg(
+                        _throttle_sec=5,
+                        gui_window=self.gui_window,
+                        color="msg_blue",
+                        msg="Skipping retargeting - currently fighting"
+                    )
+                elif self.__check_mob_existence():
+                    emit_msg(
+                        _throttle_sec=5,
+                        gui_window=self.gui_window,
+                        color="msg_blue",
+                        msg="Skipping retargeting - mob already selected"
+                    )
+                sleep(1)
 
             if (self.config["mobs_kill_goal"] is not None) and (mobs_killed >= int(self.config["mobs_kill_goal"])):
                 break
@@ -190,9 +224,6 @@ class Bot:
                 else f"Mobs killed: {mobs_killed}",
             )
 
-            if not self.__farm_thread_running:
-                break
-
     def __mobs_available_on_screen(self, current_mob, points, mobs_killed):
         frame_w = self.frame.shape[1]
         frame_h = self.frame.shape[0]
@@ -201,29 +232,73 @@ class Bot:
         monsters_count = mobs_killed
         mob_pos = get_point_near_center(frame_center, points)
         self.mouse.move(to_point=mob_pos, duration=0.1)
+        # Click on the mob first
+        self.mouse.left_click()
+        sleep(0.1)  # Give a moment for the mob to be selected
+        # Then check if the mob exists (life bar appears after clicking)
         if self.__check_mob_existence():
-            self.mouse.left_click()
+            self.__currently_fighting = True  # Set fighting state
+            emit_msg(
+                gui_window=self.gui_window,
+                color="msg_blue", 
+                msg="Engaging mob - fighting mode ON"
+            )
             self.keyboard.hold_key(VKEY["F1"], press_time=0.06)
             self.mouse.move_outside_game(duration=0.2)
             fight_time = time()
             while True:
+                if not self.__farm_thread_running:  # Check if bot was stopped
+                    self.__currently_fighting = False
+                    break
                 if not self.__check_mob_still_alive(current_mob):
                     monsters_count += 1
+                    self.__currently_fighting = False  # Clear fighting state when mob dies
+                    emit_msg(
+                        gui_window=self.gui_window,
+                        color="msg_green",
+                        msg="Mob killed - fighting mode OFF"
+                    )
                     break
                 else:
                     if (time() - fight_time) >= int(self.config["fight_time_limit_sec"]):
                         # Unselect the mob if the fight limite is over
                         self.keyboard.hold_key(VKEY["esc"], press_time=0.06)
+                        self.__currently_fighting = False  # Clear fighting state when timeout
+                        emit_msg(
+                            gui_window=self.gui_window,
+                            color="msg_purple",
+                            msg="Fight timeout - fighting mode OFF"
+                        )
                         break
+                    # Press "1" key to attack while fighting
+                    self.keyboard.press_key(VKEY["1"])
                     sleep(float(self.config["delay_to_check_mob_still_alive_sec"]))
+        else:
+            # If mob doesn't exist after clicking, make sure fighting state is not set
+            self.__currently_fighting = False
+            emit_msg(
+                gui_window=self.gui_window,
+                color="msg_red",
+                msg="Failed to engage mob - no target found"
+            )
         return monsters_count
 
     def __mobs_not_available_on_screen(self):
-        print("No Mobs in Area, moving.")
-        self.keyboard.human_turn_back()
-        self.keyboard.hold_key(VKEY["w"], press_time=4)
-        sleep(0.1)
-        self.keyboard.press_key(VKEY["s"])
+        print("No Mobs in Area, rotating camera slowly to the right.")
+        emit_msg(
+            gui_window=self.gui_window,
+            color="msg_purple",
+            msg="No mobs found - rotating camera super slowly to the right"
+        )
+        
+        # Super slow camera rotation to the right using keyboard right arrow
+        rotation_duration = float(self.config["camera_rotation_duration_sec"])
+        
+        # Use right arrow key for super slow, controlled rotation
+        # Hold the right arrow key for the specified duration
+        self.keyboard.hold_key(VKEY["right_arrow"], press_time=rotation_duration)
+        
+        sleep(1.5)  # Longer pause after rotation to allow mob detection and settling
 
     def __convert_penya_to_perins(self):
         # Open the inventory
